@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // covers it — no worker change needed.
 // ═══════════════════════════════════════════════════════════════
 
-const BUILD_VERSION = "2026-08-09-v4";
+const BUILD_VERSION = "2026-08-09-v5";
 const PROXY_URL = "https://divine-dust-7329.andrei-secuesu.workers.dev";
 
 // ── Theme ──────────────────────────────────────────────────────
@@ -108,17 +108,19 @@ function useStored(key, initial) {
 
 const EMPTY_PROFILE = {
   firstName: "", lastName: "", gradYear: "", teamGender: "Women's",
-  sport: "Track & Field",
+  sport: "", // no assumed sport — the athlete picks their own
   events: "", prs: "", gpa: "", highSchool: "", location: "",
   clubTeam: "", videoUrl: "", phone: "", email: "",
 };
 
-// Common NCAA sports for the sport picker (free text still allowed via the input).
+// NCAA-sponsored sports (championship + emerging) for the picker's suggestions.
+// The field is free text, so anything not listed can still be typed.
 const SPORTS = [
-  "Track & Field", "Cross Country", "Soccer", "Basketball", "Swimming & Diving",
-  "Rowing", "Lacrosse", "Volleyball", "Softball", "Baseball", "Field Hockey",
-  "Tennis", "Golf", "Wrestling", "Football", "Ice Hockey", "Water Polo",
-  "Gymnastics", "Beach Volleyball", "Fencing",
+  "Acrobatics & Tumbling", "Baseball", "Basketball", "Beach Volleyball", "Bowling",
+  "Cross Country", "Equestrian", "Fencing", "Field Hockey", "Football", "Golf",
+  "Gymnastics", "Ice Hockey", "Lacrosse", "Rifle", "Rowing", "Rugby", "Sailing",
+  "Skiing", "Soccer", "Softball", "Squash", "Swimming & Diving", "Tennis",
+  "Track & Field", "Triathlon", "Volleyball", "Water Polo", "Wrestling",
 ];
 
 // Sensible default gender for single-gender NCAA sports (helpful, not a hard lock —
@@ -137,19 +139,19 @@ const lastName = full => (full || "").trim().split(/\s+/).pop() || "";
 // ── Email draft builder ────────────────────────────────────────
 function buildEmail(profile, coach) {
   const p = profile;
-  const sport = p.sport || "Track & Field";
+  const sport = (p.sport || "").trim();
   const sportLower = sport.toLowerCase();
   const name = [p.firstName, p.lastName].filter(Boolean).join(" ") || "[Your name]";
   const coachLast = lastName(coach.Name) || "Coach";
   const grad = p.gradYear ? `Class of ${p.gradYear}` : "prospective student-athlete";
   const teamWord = (coach.Gender || p.teamGender || "").toString().toLowerCase();
 
-  const subject = `${p.events ? p.events + " " : ""}${sport} Recruit — ${grad}${p.firstName || p.lastName ? " — " + name : ""}`.trim();
+  const subject = `${p.events ? p.events + " " : ""}${sport ? sport + " " : ""}Recruit — ${grad}${p.firstName || p.lastName ? " — " + name : ""}`.trim();
 
   const lines = [];
   lines.push(`Dear Coach ${coachLast},`);
   lines.push("");
-  const intro = `My name is ${name} and I'm a ${grad}${p.highSchool ? ` at ${p.highSchool}` : ""}${p.location ? ` in ${p.location}` : ""}. I'm very interested in ${coach.School}'s ${teamWord ? teamWord + " " : ""}${sportLower} program and would love to be considered for your recruiting class.`;
+  const intro = `My name is ${name} and I'm a ${grad}${p.highSchool ? ` at ${p.highSchool}` : ""}${p.location ? ` in ${p.location}` : ""}. I'm very interested in ${coach.School}'s ${teamWord ? teamWord + " " : ""}${sport ? sportLower + " " : ""}program and would love to be considered for your recruiting class.`;
   lines.push(intro);
   lines.push("");
   const stats = [];
@@ -244,9 +246,9 @@ function ProfileTab({ profile, setProfile }) {
 
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: T.sub, marginBottom: 5 }}>My sport</div>
-        <input list="rcf-sports" value={profile.sport ?? "Track & Field"}
+        <input list="rcf-sports" value={profile.sport || ""}
           onChange={e => { const v = e.target.value; const dg = defaultGenderFor(v); setProfile(p => ({ ...p, sport: v, ...(dg ? { teamGender: dg } : {}) })); }}
-          placeholder="Track & Field"
+          placeholder="Start typing… e.g. Soccer, Rowing, Track & Field"
           style={{ width: "100%", padding: "11px 13px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 15, background: "#fbfdfc", outline: "none", color: T.ink }} />
         <datalist id="rcf-sports">{SPORTS.map(s => <option key={s} value={s} />)}</datalist>
       </div>
@@ -425,8 +427,9 @@ function FindTab({ profile, setProfile, results, setResults, savedKeys, toggleSa
   useEffect(() => { setGender(profile.teamGender || "Women's"); }, [profile.teamGender]);
 
   const genderWord = g => (g === "Men's" ? "men" : "women");
-  const sport = profile.sport || "Track & Field";
+  const sport = (profile.sport || "").trim();
   const sportLower = sport.toLowerCase();
+  const hasSport = sport.length >= 2;
   // Track & Field programs also cover cross country — search both for that sport only.
   const searchSport = /track\s*&?\s*field/i.test(sport) ? "track and field / cross country" : sport;
 
@@ -435,6 +438,7 @@ function FindTab({ profile, setProfile, results, setResults, savedKeys, toggleSa
   async function searchSchool() {
     const school = query.trim();
     if (!school) return;
+    if (!hasSport) { setStatus("Choose your sport above first."); return; }
     setBusy(true); setStatus(`Looking up ${gender.toLowerCase()} ${sportLower} coaches at ${school}…`);
     try {
       const g = genderWord(gender);
@@ -521,7 +525,7 @@ Return ONLY a valid JSON object, no markdown:
       {/* Search hero */}
       <div style={{ background: T.card, borderRadius: 16, border: `1px solid ${T.line}`, padding: "18px 18px 20px", marginBottom: 16, boxShadow: "0 1px 3px rgba(20,40,40,0.05)" }}>
         <div style={{ fontSize: 17, fontWeight: 800, color: T.ink, marginBottom: 3 }}>Look up a college's coaches</div>
-        <div style={{ fontSize: 13, color: T.sub, marginBottom: 14 }}>Type a school you're interested in. We'll pull its {sportLower} staff and emails.</div>
+        <div style={{ fontSize: 13, color: T.sub, marginBottom: 14 }}>Type a school you're interested in. We'll pull its {hasSport ? sportLower + " " : ""}staff and emails.</div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 150px", minWidth: 140 }}>
@@ -548,10 +552,15 @@ Return ONLY a valid JSON object, no markdown:
             placeholder="e.g. Stanford, Oregon, Villanova…"
             style={{ flex: 1, padding: "13px 15px", borderRadius: 12, border: `1px solid ${T.line}`, fontSize: 16, outline: "none", color: T.ink, background: "#fbfdfc" }}
           />
-          <PrimaryBtn onClick={searchSchool} disabled={busy || !query.trim()} style={{ padding: "0 20px" }}>
+          <PrimaryBtn onClick={searchSchool} disabled={busy || !query.trim() || !hasSport} style={{ padding: "0 20px" }}>
             {busy ? <Spinner /> : "Search"}
           </PrimaryBtn>
         </div>
+        {!hasSport && (
+          <div style={{ marginTop: 8, fontSize: 12, color: T.gold, fontWeight: 600 }}>
+            Choose your sport above to start searching.
+          </div>
+        )}
 
         <button onClick={() => setBrowseOpen(o => !o)} style={{ marginTop: 12, background: "none", border: "none", color: T.accent, fontWeight: 600, fontSize: 13, cursor: "pointer", padding: 0 }}>
           {browseOpen ? "▾" : "▸"} Not sure which schools? Browse programs by division & conference
@@ -600,13 +609,14 @@ Return ONLY a valid JSON object, no markdown:
 }
 
 // ── Browse-by-conference panel (secondary discovery path) ──────
-function BrowsePanel({ gender, sport = "Track & Field", busy, setBusy, setStatus, setResults, cancelRef }) {
+function BrowsePanel({ gender, sport = "", busy, setBusy, setStatus, setResults, cancelRef }) {
   const [division, setDivision] = useState("Division I");
   const [conferences, setConferences] = useState([]);
   const [selConf, setSelConf] = useState("");
   const [schools, setSchools] = useState([]);
   const genderWord = g => (g === "Men's" ? "men" : "women");
-  const sportLower = sport.toLowerCase();
+  const sportLower = (sport || "").toLowerCase();
+  const hasSport = (sport || "").trim().length >= 2;
 
   // If the athlete flips the team gender after schools are loaded, that list is
   // now the wrong gender — clear it so they re-load the correct one.
@@ -668,12 +678,17 @@ Return ONLY JSON: {"pageUrl":"...","coaches":[{"title":"","name":"","email":""}]
 
   return (
     <div style={{ marginTop: 12, paddingTop: 14, borderTop: `1px solid ${T.line}` }}>
+      {!hasSport && (
+        <div style={{ fontSize: 12, color: T.gold, fontWeight: 600, marginBottom: 10 }}>
+          Choose your sport above to browse programs.
+        </div>
+      )}
       <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
         {["Division I", "Division II", "Division III"].map(d => (
           <GhostBtn key={d} active={division === d} onClick={() => setDivision(d)} style={{ flex: 1, padding: "8px 0", textAlign: "center" }}>{d.replace("Division ", "D")}</GhostBtn>
         ))}
       </div>
-      <GhostBtn onClick={loadConferences} disabled={busy} style={{ width: "100%", textAlign: "center", padding: "10px", marginBottom: 10 }}>
+      <GhostBtn onClick={loadConferences} disabled={busy || !hasSport} style={{ width: "100%", textAlign: "center", padding: "10px", marginBottom: 10, opacity: hasSport ? 1 : 0.5 }}>
         Load {division} conferences
       </GhostBtn>
       {conferences.length > 0 && (
