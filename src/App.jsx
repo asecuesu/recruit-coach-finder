@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // covers it — no worker change needed.
 // ═══════════════════════════════════════════════════════════════
 
-const BUILD_VERSION = "2026-08-09-v9";
+const BUILD_VERSION = "2026-08-09-v10";
 const PROXY_URL = "https://divine-dust-7329.andrei-secuesu.workers.dev";
 
 // ── Theme ──────────────────────────────────────────────────────
