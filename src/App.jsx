@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // covers it — no worker change needed.
 // ═══════════════════════════════════════════════════════════════
 
-const BUILD_VERSION = "2026-08-09-v1";
+const BUILD_VERSION = "2026-08-09-v3";
 const PROXY_URL = "https://divine-dust-7329.andrei-secuesu.workers.dev";
 
 // ── Theme ──────────────────────────────────────────────────────
@@ -108,9 +108,27 @@ function useStored(key, initial) {
 
 const EMPTY_PROFILE = {
   firstName: "", lastName: "", gradYear: "", teamGender: "Women's",
+  sport: "Track & Field",
   events: "", prs: "", gpa: "", highSchool: "", location: "",
   clubTeam: "", videoUrl: "", phone: "", email: "",
 };
+
+// Common NCAA sports for the sport picker (free text still allowed via the input).
+const SPORTS = [
+  "Track & Field", "Cross Country", "Soccer", "Basketball", "Swimming & Diving",
+  "Rowing", "Lacrosse", "Volleyball", "Softball", "Baseball", "Field Hockey",
+  "Tennis", "Golf", "Wrestling", "Football", "Ice Hockey", "Water Polo",
+  "Gymnastics", "Beach Volleyball", "Fencing",
+];
+
+// Sensible default gender for single-gender NCAA sports (helpful, not a hard lock —
+// the athlete can still switch, since some of these have emerging programs).
+function defaultGenderFor(sport) {
+  const s = (sport || "").toLowerCase();
+  if (/softball|field hockey|beach volleyball/.test(s)) return "Women's";
+  if (s === "baseball" || s === "football") return "Men's";
+  return null;
+}
 
 // A coach's identity key (dedupe + saved lookups)
 const coachKey = c => `${(c.School || "").toLowerCase()}|${(c.Gender || "").toLowerCase()}|${(c.Name || "").toLowerCase()}`;
@@ -119,21 +137,23 @@ const lastName = full => (full || "").trim().split(/\s+/).pop() || "";
 // ── Email draft builder ────────────────────────────────────────
 function buildEmail(profile, coach) {
   const p = profile;
+  const sport = p.sport || "Track & Field";
+  const sportLower = sport.toLowerCase();
   const name = [p.firstName, p.lastName].filter(Boolean).join(" ") || "[Your name]";
   const coachLast = lastName(coach.Name) || "Coach";
-  const evt = p.events || "track & field";
   const grad = p.gradYear ? `Class of ${p.gradYear}` : "prospective student-athlete";
+  const teamWord = (coach.Gender || p.teamGender || "").toString().toLowerCase();
 
-  const subject = `${p.events ? p.events + " " : ""}Recruit — ${grad}${p.firstName || p.lastName ? " — " + name : ""}`.trim();
+  const subject = `${p.events ? p.events + " " : ""}${sport} Recruit — ${grad}${p.firstName || p.lastName ? " — " + name : ""}`.trim();
 
   const lines = [];
   lines.push(`Dear Coach ${coachLast},`);
   lines.push("");
-  const intro = `My name is ${name} and I'm a ${grad}${p.highSchool ? ` at ${p.highSchool}` : ""}${p.location ? ` in ${p.location}` : ""}. I'm very interested in ${coach.School}'s ${(coach.Gender || p.teamGender || "").toString().toLowerCase().replace(/'s$/, "'s")} track & field program and would love to be considered for your recruiting class.`;
+  const intro = `My name is ${name} and I'm a ${grad}${p.highSchool ? ` at ${p.highSchool}` : ""}${p.location ? ` in ${p.location}` : ""}. I'm very interested in ${coach.School}'s ${teamWord ? teamWord + " " : ""}${sportLower} program and would love to be considered for your recruiting class.`;
   lines.push(intro);
   lines.push("");
   const stats = [];
-  if (p.events) stats.push(`Events: ${p.events}`);
+  if (p.events) stats.push(`Events / position: ${p.events}`);
   if (p.prs) stats.push(`Personal bests: ${p.prs}`);
   if (p.gpa) stats.push(`GPA: ${p.gpa}`);
   if (p.clubTeam) stats.push(`Club/Team: ${p.clubTeam}`);
@@ -222,6 +242,15 @@ function ProfileTab({ profile, setProfile }) {
         <Field label="Last name" value={profile.lastName} onChange={e => set("lastName", e.target.value)} placeholder="Rivera" />
       </div>
 
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: T.sub, marginBottom: 5 }}>My sport</div>
+        <input list="rcf-sports" value={profile.sport ?? "Track & Field"}
+          onChange={e => { const v = e.target.value; const dg = defaultGenderFor(v); setProfile(p => ({ ...p, sport: v, ...(dg ? { teamGender: dg } : {}) })); }}
+          placeholder="Track & Field"
+          style={{ width: "100%", padding: "11px 13px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 15, background: "#fbfdfc", outline: "none", color: T.ink }} />
+        <datalist id="rcf-sports">{SPORTS.map(s => <option key={s} value={s} />)}</datalist>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
         <Field label="Graduation year" hint="class of" value={profile.gradYear} onChange={e => set("gradYear", e.target.value)} placeholder="2027" inputMode="numeric" />
         <div style={{ marginBottom: 14 }}>
@@ -234,7 +263,7 @@ function ProfileTab({ profile, setProfile }) {
         </div>
       </div>
 
-      <Field label="Events" hint="what you'd be recruited for" value={profile.events} onChange={e => set("events", e.target.value)} placeholder="Long Jump, 100m, 200m" />
+      <Field label="Events / position" hint="what you'd be recruited for" value={profile.events} onChange={e => set("events", e.target.value)} placeholder="Long Jump, 100m — or: Midfielder, Coxswain…" />
       <Field label="Personal bests" value={profile.prs} onChange={e => set("prs", e.target.value)} placeholder="LJ 6.10m, 100m 11.8" />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
@@ -385,7 +414,7 @@ function EmailModal({ coach, profile, onClose }) {
 // ═══════════════════════════════════════════════════════════════
 // FIND TAB
 // ═══════════════════════════════════════════════════════════════
-function FindTab({ profile, results, setResults, savedKeys, toggleSave, openEmail }) {
+function FindTab({ profile, setProfile, results, setResults, savedKeys, toggleSave, openEmail }) {
   const [query, setQuery] = useState("");
   const [gender, setGender] = useState(profile.teamGender || "Women's");
   const [busy, setBusy] = useState(false);
@@ -396,15 +425,21 @@ function FindTab({ profile, results, setResults, savedKeys, toggleSave, openEmai
   useEffect(() => { setGender(profile.teamGender || "Women's"); }, [profile.teamGender]);
 
   const genderWord = g => (g === "Men's" ? "men" : "women");
+  const sport = profile.sport || "Track & Field";
+  const sportLower = sport.toLowerCase();
+  // Track & Field programs also cover cross country — search both for that sport only.
+  const searchSport = /track\s*&?\s*field/i.test(sport) ? "track and field / cross country" : sport;
+
+  const changeSport = v => { const dg = defaultGenderFor(v); setProfile(p => ({ ...p, sport: v, ...(dg ? { teamGender: dg } : {}) })); };
 
   async function searchSchool() {
     const school = query.trim();
     if (!school) return;
-    setBusy(true); setStatus(`Looking up ${gender.toLowerCase()} track & field coaches at ${school}…`);
+    setBusy(true); setStatus(`Looking up ${gender.toLowerCase()} ${sportLower} coaches at ${school}…`);
     try {
       const g = genderWord(gender);
-      const prompt = `Find the ${g}'s track and field / cross country coaching staff at ${school} (a U.S. college or university).
-Go to their OFFICIAL athletics website coaches/staff directory page for ${g}'s track & field.
+      const prompt = `Find the ${g}'s ${searchSport} coaching staff at ${school} (a U.S. college or university).
+Go to their OFFICIAL athletics website coaches/staff directory page for ${g}'s ${sportLower} — make sure it is the ${g}'s program, not the other gender's program of the same sport.
 Extract EVERY coach — head coach and ALL assistants. Get their exact title, full name, and email address.
 Emails are usually shown in the staff directory next to the name and phone number.
 
@@ -426,7 +461,7 @@ Return ONLY a valid JSON object, no markdown:
           _pageUrl: obj.pageUrl || "",
         }));
       if (rows.length === 0) {
-        setStatus(`Couldn't find a ${gender.toLowerCase()} track & field staff for “${school}”. Check the spelling or try the full official name.`);
+        setStatus(`Couldn't find a ${gender.toLowerCase()} ${sportLower} staff for “${school}”. Check the spelling or try the full official name.`);
       } else {
         // Prepend new results, de-duped by coach identity
         setResults(prev => {
@@ -458,7 +493,7 @@ Return ONLY a valid JSON object, no markdown:
       try {
         let pageUrl = groups[keys[i]].find(c => c._pageUrl)?._pageUrl;
         if (!pageUrl) {
-          const urlText = await geminiSearch(`What is the exact URL of the coaches/staff directory page for the ${genderWord(g)}'s track & field program at ${school}? Reply with ONLY the URL.`);
+          const urlText = await geminiSearch(`What is the exact URL of the coaches/staff directory page for the ${genderWord(g)}'s ${sportLower} program at ${school}? Reply with ONLY the URL.`);
           const m = urlText.match(/https?:\/\/[^\s"'<>]+/);
           pageUrl = m ? m[0] : null;
         }
@@ -486,12 +521,23 @@ Return ONLY a valid JSON object, no markdown:
       {/* Search hero */}
       <div style={{ background: T.card, borderRadius: 16, border: `1px solid ${T.line}`, padding: "18px 18px 20px", marginBottom: 16, boxShadow: "0 1px 3px rgba(20,40,40,0.05)" }}>
         <div style={{ fontSize: 17, fontWeight: 800, color: T.ink, marginBottom: 3 }}>Look up a college's coaches</div>
-        <div style={{ fontSize: 13, color: T.sub, marginBottom: 14 }}>Type a school you're interested in. We'll pull its track & field staff and emails.</div>
+        <div style={{ fontSize: 13, color: T.sub, marginBottom: 14 }}>Type a school you're interested in. We'll pull its {sportLower} staff and emails.</div>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          {["Women's", "Men's"].map(g => (
-            <GhostBtn key={g} active={gender === g} onClick={() => setGender(g)} style={{ flex: 1 }}>{g} team</GhostBtn>
-          ))}
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 150px", minWidth: 140 }}>
+            <div style={{ fontSize: 10, letterSpacing: 1, color: T.faint, textTransform: "uppercase", marginBottom: 4, fontWeight: 700 }}>Sport</div>
+            <input list="rcf-sports" value={sport} onChange={e => changeSport(e.target.value)} placeholder="Track & Field"
+              style={{ width: "100%", padding: "9px 12px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 14, outline: "none", color: T.ink, background: "#fbfdfc" }} />
+            <datalist id="rcf-sports">{SPORTS.map(s => <option key={s} value={s} />)}</datalist>
+          </div>
+          <div style={{ flex: "1 1 180px", minWidth: 160 }}>
+            <div style={{ fontSize: 10, letterSpacing: 1, color: T.faint, textTransform: "uppercase", marginBottom: 4, fontWeight: 700 }}>Team</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {["Women's", "Men's"].map(g => (
+                <GhostBtn key={g} active={gender === g} onClick={() => setGender(g)} style={{ flex: 1, padding: "8px 6px" }}>{g}</GhostBtn>
+              ))}
+            </div>
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
@@ -510,7 +556,7 @@ Return ONLY a valid JSON object, no markdown:
         <button onClick={() => setBrowseOpen(o => !o)} style={{ marginTop: 12, background: "none", border: "none", color: T.accent, fontWeight: 600, fontSize: 13, cursor: "pointer", padding: 0 }}>
           {browseOpen ? "▾" : "▸"} Not sure which schools? Browse programs by division & conference
         </button>
-        {browseOpen && <BrowsePanel gender={gender} setBusy={setBusy} busy={busy} setStatus={setStatus} setResults={setResults} cancelRef={cancelRef} />}
+        {browseOpen && <BrowsePanel gender={gender} sport={sport} setBusy={setBusy} busy={busy} setStatus={setStatus} setResults={setResults} cancelRef={cancelRef} />}
       </div>
 
       {status && (
@@ -554,17 +600,27 @@ Return ONLY a valid JSON object, no markdown:
 }
 
 // ── Browse-by-conference panel (secondary discovery path) ──────
-function BrowsePanel({ gender, busy, setBusy, setStatus, setResults, cancelRef }) {
+function BrowsePanel({ gender, sport = "Track & Field", busy, setBusy, setStatus, setResults, cancelRef }) {
   const [division, setDivision] = useState("Division I");
   const [conferences, setConferences] = useState([]);
   const [selConf, setSelConf] = useState("");
   const [schools, setSchools] = useState([]);
   const genderWord = g => (g === "Men's" ? "men" : "women");
+  const sportLower = sport.toLowerCase();
+
+  // If the athlete flips the team gender after schools are loaded, that list is
+  // now the wrong gender — clear it so they re-load the correct one.
+  const firstGenderRun = useRef(true);
+  useEffect(() => {
+    if (firstGenderRun.current) { firstGenderRun.current = false; return; }
+    setSchools([]);
+    if (selConf) setStatus(`Switched to ${gender.toLowerCase()} — re-select ${selConf} to load its schools.`);
+  }, [gender]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadConferences() {
     setBusy(true); setStatus(`Loading ${division} conferences…`);
     try {
-      const text = await geminiSearch(`List all NCAA ${division} athletic conferences that sponsor varsity track and field. Return ONLY a JSON array of conference name strings.`);
+      const text = await geminiSearch(`List all NCAA ${division} athletic conferences that sponsor varsity ${sportLower}. Return ONLY a JSON array of conference name strings.`);
       setConferences(extractJsonArray(text).filter(c => typeof c === "string" && c.length > 1).sort());
       setStatus("Pick a conference to see its schools.");
     } catch (e) { setStatus(e.message); }
@@ -572,11 +628,18 @@ function BrowsePanel({ gender, busy, setBusy, setStatus, setResults, cancelRef }
   }
 
   async function loadSchools(conf) {
-    setSelConf(conf); setBusy(true); setSchools([]); setStatus(`Loading schools in ${conf}…`);
+    setSelConf(conf); setBusy(true); setSchools([]);
+    const gLabel = gender; // "Women's" / "Men's"
+    setStatus(`Loading ${gLabel.toLowerCase()} ${sportLower} schools in ${conf}…`);
     try {
-      const text = await geminiSearch(`List every college in the ${conf} conference (NCAA ${division}) that sponsors varsity track and field. Return ONLY a JSON array: [{"name":"School","state":"XX"}]`);
+      // Gender-accurate discovery (ported from the Python scraper's schools-first
+      // approach): ask specifically for the selected gender's program and guard
+      // against Gemini confusing it with the other gender's program.
+      const text = await geminiSearch(`List every college in the ${conf} conference (NCAA ${division}) that sponsors a varsity ${gLabel} ${sportLower} program.
+Only include schools that actually field a ${gLabel} team — do NOT confuse this with the other gender's program of the same sport, and do not drop real member schools.
+Return ONLY a JSON array, no markdown: [{"name":"School","state":"XX"}]`);
       setSchools(extractJsonArray(text).filter(s => s && s.name));
-      setStatus(`Tap a school to pull its ${gender.toLowerCase()} coaches.`);
+      setStatus(`Tap a school to pull its ${gLabel.toLowerCase()} coaches.`);
     } catch (e) { setStatus(e.message); }
     setBusy(false);
   }
@@ -585,7 +648,7 @@ function BrowsePanel({ gender, busy, setBusy, setStatus, setResults, cancelRef }
     setBusy(true); setStatus(`Getting ${gender.toLowerCase()} coaches at ${s.name}…`);
     try {
       const g = genderWord(gender);
-      const text = await geminiSearch(`Go to the official athletics website for ${s.name}${s.state ? ` (${s.state})` : ""}, ${selConf} conference. Navigate to their ${g}'s track & field COACHES page. Extract every coach — head and all assistants — with exact title, full name, and email.
+      const text = await geminiSearch(`Go to the official athletics website for ${s.name}${s.state ? ` (${s.state})` : ""}, ${selConf} conference. Navigate to their ${g}'s ${sportLower} COACHES page — make sure it is the ${g}'s program, not the other gender's. Extract every coach — head and all assistants — with exact title, full name, and email.
 Return ONLY JSON: {"pageUrl":"...","coaches":[{"title":"","name":"","email":""}]}. Use null for email only if not listed. Never invent data.`);
       const parsed = extractJson(text);
       const obj = parsed && !Array.isArray(parsed) ? parsed : { coaches: Array.isArray(parsed) ? parsed : [] };
@@ -721,7 +784,7 @@ export default function App() {
             <span style={{ fontSize: 22 }}>🏃</span>
             <div>
               <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: -0.3 }}>Coach Finder</div>
-              <div style={{ fontSize: 12, opacity: 0.85 }}>Reach college T&F coaches</div>
+              <div style={{ fontSize: 12, opacity: 0.85 }}>Reach college {(profile.sport || "Track & Field").toLowerCase()} coaches</div>
             </div>
           </div>
           <div style={{ fontSize: 10, opacity: 0.5 }} title="build version">v{BUILD_VERSION}</div>
@@ -744,7 +807,7 @@ export default function App() {
       {/* Body */}
       <div style={{ maxWidth: 720, margin: "0 auto", padding: "20px 14px 0" }}>
         {tab === "find" && (
-          <FindTab profile={profile} results={results} setResults={setResults}
+          <FindTab profile={profile} setProfile={setProfile} results={results} setResults={setResults}
             savedKeys={savedKeys} toggleSave={toggleSave} openEmail={setEmailCoach} />
         )}
         {tab === "list" && (
