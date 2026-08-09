@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // covers it — no worker change needed.
 // ═══════════════════════════════════════════════════════════════
 
-const BUILD_VERSION = "2026-08-09-v6";
+const BUILD_VERSION = "2026-08-09-v7";
 const PROXY_URL = "https://divine-dust-7329.andrei-secuesu.workers.dev";
 
 // ── Theme ──────────────────────────────────────────────────────
@@ -617,8 +617,10 @@ const ALPHA_CHUNKS = [["A", "F"], ["G", "M"], ["N", "S"], ["T", "Z"]];
 function BrowsePanel({ gender, sport = "", busy, setBusy, setStatus, setResults, cancelRef }) {
   const [division, setDivision] = useState("Division I");
   const [schools, setSchools] = useState([]);
+  const [selSchools, setSelSchools] = useState([]); // school names picked for scraping
   const [confFilter, setConfFilter] = useState(""); // "" = all derived conferences
   const [discovering, setDiscovering] = useState(false);
+  const [scraping, setScraping] = useState(false);
   const genderWord = g => (g === "Men's" ? "men" : "women");
   const sportLower = (sport || "").toLowerCase();
   const hasSport = (sport || "").trim().length >= 2;
@@ -634,12 +636,12 @@ function BrowsePanel({ gender, sport = "", busy, setBusy, setStatus, setResults,
   const firstRun = useRef(true);
   useEffect(() => {
     if (firstRun.current) { firstRun.current = false; return; }
-    setSchools([]); setConfFilter("");
+    setSchools([]); setSelSchools([]); setConfFilter("");
   }, [gender, division]);
 
   async function discoverSchools() {
     if (!hasSport) return;
-    setBusy(true); setDiscovering(true); setSchools([]); setConfFilter("");
+    setBusy(true); setDiscovering(true); setSchools([]); setSelSchools([]); setConfFilter("");
     cancelRef.current = false;
     const gLabel = gender; // "Women's" / "Men's"
     const found = [];
@@ -661,35 +663,55 @@ If no schools in this letter range sponsor ${gLabel} ${sportLower}, return [].`)
     const unique = dedupe(found);
     setSchools(unique);
     setStatus(unique.length
-      ? `Found ${unique.length} ${gLabel.toLowerCase()} ${sportLower} program${unique.length !== 1 ? "s" : ""}. Tap a school to get its coaches.`
+      ? `Found ${unique.length} ${gLabel.toLowerCase()} ${sportLower} program${unique.length !== 1 ? "s" : ""}. Select the schools you want, then get their coaches.`
       : `No ${gLabel.toLowerCase()} ${sportLower} programs found in ${division}.`);
     setDiscovering(false); setBusy(false);
   }
 
-  async function pullSchool(s) {
-    setBusy(true); setStatus(`Getting ${gender.toLowerCase()} ${sportLower} coaches at ${s.name}…`);
-    try {
-      const g = genderWord(gender);
-      const text = await geminiSearch(`Go to the official athletics website for ${s.name}${s.state ? ` (${s.state})` : ""}${s.conference ? `, ${s.conference}` : ""}. Navigate to their ${g}'s ${sportLower} COACHES page — make sure it is the ${g}'s program, not the other gender's. Extract every coach — head and all assistants — with exact title, full name, and email.
+  // Fetch coaches for one school; returns how many new rows were added.
+  async function fetchCoachesForSchool(s) {
+    const g = genderWord(gender);
+    const text = await geminiSearch(`Go to the official athletics website for ${s.name}${s.state ? ` (${s.state})` : ""}${s.conference ? `, ${s.conference}` : ""}. Navigate to their ${g}'s ${sportLower} COACHES page — make sure it is the ${g}'s program, not the other gender's. Extract every coach — head and all assistants — with exact title, full name, and email.
 Return ONLY JSON: {"pageUrl":"...","coaches":[{"title":"","name":"","email":""}]}. Use null for email only if not listed. Never invent data.`);
-      const parsed = extractJson(text);
-      const obj = parsed && !Array.isArray(parsed) ? parsed : { coaches: Array.isArray(parsed) ? parsed : [] };
-      const rows = (obj.coaches || []).filter(c => c && (c.name || "").length > 2).map(c => ({
-        School: s.name, Conference: s.conference || "", Division: division, Gender: gender,
-        Title: c.title || "Coach", Name: c.name,
-        Email: c.email && String(c.email).includes("@") ? c.email : "", _pageUrl: obj.pageUrl || "",
-      }));
-      setResults(prev => {
-        const keys = new Set(prev.map(coachKey));
-        return [...rows.filter(r => !keys.has(coachKey(r))), ...prev];
-      });
-      setStatus(rows.length ? `Added ${rows.length} coach${rows.length !== 1 ? "es" : ""} from ${s.name}.` : `No coaches found for ${s.name}.`);
-    } catch (e) { setStatus(e.message); }
-    setBusy(false);
+    const parsed = extractJson(text);
+    const obj = parsed && !Array.isArray(parsed) ? parsed : { coaches: Array.isArray(parsed) ? parsed : [] };
+    const rows = (obj.coaches || []).filter(c => c && (c.name || "").length > 2).map(c => ({
+      School: s.name, Conference: s.conference || "", Division: division, Gender: gender,
+      Title: c.title || "Coach", Name: c.name,
+      Email: c.email && String(c.email).includes("@") ? c.email : "", _pageUrl: obj.pageUrl || "",
+    }));
+    let added = 0;
+    setResults(prev => {
+      const keys = new Set(prev.map(coachKey));
+      const fresh = rows.filter(r => !keys.has(coachKey(r)));
+      added = fresh.length;
+      return [...fresh, ...prev];
+    });
+    return added;
   }
 
+  // Scrape every school the athlete selected, one after another.
+  async function scrapeSelected() {
+    const targets = schools.filter(s => selSchools.includes(s.name));
+    if (!targets.length) return;
+    setBusy(true); setScraping(true); cancelRef.current = false;
+    let total = 0;
+    for (let i = 0; i < targets.length; i++) {
+      if (cancelRef.current) { setStatus(`Stopped after ${i} of ${targets.length} schools.`); break; }
+      const s = targets[i];
+      setStatus(`Getting ${gender.toLowerCase()} ${sportLower} coaches… (${i + 1}/${targets.length}) ${s.name}`);
+      try { total += await fetchCoachesForSchool(s); } catch { /* skip, keep going */ }
+      if (!cancelRef.current && i < targets.length - 1) await new Promise(r => setTimeout(r, 3000));
+    }
+    if (!cancelRef.current) setStatus(`Done — added ${total} coach${total !== 1 ? "es" : ""} from ${targets.length} school${targets.length !== 1 ? "s" : ""}.`);
+    setScraping(false); setBusy(false);
+  }
+
+  const toggleSchool = name => setSelSchools(p => p.includes(name) ? p.filter(x => x !== name) : [...p, name]);
   const derivedConfs = [...new Set(schools.map(s => (s.conference || "").trim()).filter(Boolean))].sort();
   const shownSchools = confFilter ? schools.filter(s => (s.conference || "").trim() === confFilter) : schools;
+  const shownNames = shownSchools.map(s => s.name);
+  const allShownSelected = shownNames.length > 0 && shownNames.every(n => selSchools.includes(n));
 
   return (
     <div style={{ marginTop: 12, paddingTop: 14, borderTop: `1px solid ${T.line}` }}>
@@ -727,13 +749,48 @@ Return ONLY JSON: {"pageUrl":"...","coaches":[{"title":"","name":"","email":""}]
       )}
 
       {shownSchools.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto" }}>
-          {shownSchools.map(s => (
-            <GhostBtn key={s.name} onClick={() => pullSchool(s)} disabled={busy} style={{ fontSize: 13, padding: "7px 11px" }} title={s.conference || ""}>
-              {s.name}
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
+            <div style={{ fontSize: 11, color: T.sub, fontWeight: 600 }}>
+              {selSchools.length > 0 ? `${selSchools.length} selected` : "Tap schools to select them"}
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setSelSchools(p => allShownSelected ? p.filter(n => !shownNames.includes(n)) : [...new Set([...p, ...shownNames])])}
+                disabled={busy} style={{ background: "none", border: "none", color: T.accent, fontWeight: 600, fontSize: 12, cursor: "pointer", padding: 0 }}>
+                {allShownSelected ? "Deselect all" : "Select all" + (confFilter ? " shown" : "")}
+              </button>
+              {selSchools.length > 0 && (
+                <button onClick={() => setSelSchools([])} disabled={busy} style={{ background: "none", border: "none", color: T.faint, fontWeight: 600, fontSize: 12, cursor: "pointer", padding: 0 }}>
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto", marginBottom: 10 }}>
+            {shownSchools.map(s => {
+              const on = selSchools.includes(s.name);
+              return (
+                <GhostBtn key={s.name} active={on} onClick={() => toggleSchool(s.name)} disabled={busy && !scraping}
+                  style={{ fontSize: 13, padding: "7px 11px" }} title={s.conference || ""}>
+                  {on ? "✓ " : ""}{s.name}
+                </GhostBtn>
+              );
+            })}
+          </div>
+          <PrimaryBtn onClick={scrapeSelected} disabled={busy || selSchools.length === 0}
+            style={{ width: "100%", justifyContent: "center" }}>
+            {scraping
+              ? <><Spinner /> Getting coaches…</>
+              : selSchools.length === 0
+                ? "Select schools to get coaches"
+                : `Get coaches for ${selSchools.length} ${selSchools.length === 1 ? "school" : "schools"}`}
+          </PrimaryBtn>
+          {scraping && (
+            <GhostBtn onClick={() => { cancelRef.current = true; }} style={{ width: "100%", textAlign: "center", padding: "8px", marginTop: 8, color: T.danger, borderColor: "#f0d5d0" }}>
+              Stop
             </GhostBtn>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   );
