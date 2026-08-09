@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // covers it — no worker change needed.
 // ═══════════════════════════════════════════════════════════════
 
-const BUILD_VERSION = "2026-08-09-v7";
+const BUILD_VERSION = "2026-08-09-v8";
 const PROXY_URL = "https://divine-dust-7329.andrei-secuesu.workers.dev";
 
 // ── Theme ──────────────────────────────────────────────────────
@@ -181,6 +181,20 @@ function buildEmail(profile, coach) {
 function mailtoLink(coach, subject, body) {
   const to = coach.Email || "";
   return `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+// Shared CSV export for a list of coach rows. Includes the "Verified" column
+// only when at least one row has been through the verification pass.
+function downloadCoachesCSV(rows, filename) {
+  const fields = ["School", "Conference", "Division", "Gender", "Title", "Name", "Email"];
+  if (rows.some(c => c.Verified)) fields.push("Verified");
+  const lines = [fields.join(",")];
+  rows.forEach(c => lines.push(fields.map(f => `"${String(c[f] ?? "").replace(/"/g, '""')}"`).join(",")));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
 }
 
 // ── Small UI atoms ─────────────────────────────────────────────
@@ -520,6 +534,10 @@ Return ONLY a valid JSON object, no markdown:
 
   const missingCount = results.filter(c => !c.Email).length;
 
+  function downloadResults() {
+    downloadCoachesCSV(results, `coach_emails_${(profile.sport || "coaches").toLowerCase().replace(/\W+/g, "_")}.csv`);
+  }
+
   return (
     <div style={{ maxWidth: 720, margin: "0 auto" }}>
       {/* Search hero */}
@@ -580,12 +598,13 @@ Return ONLY a valid JSON object, no markdown:
           <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>
             {results.length} coach{results.length !== 1 ? "es" : ""} found
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {missingCount > 0 && (
               <GhostBtn onClick={findMissing} disabled={busy} style={{ padding: "8px 13px", fontSize: 13 }}>
                 Find {missingCount} missing email{missingCount !== 1 ? "s" : ""}
               </GhostBtn>
             )}
+            <GhostBtn onClick={downloadResults} disabled={busy} style={{ padding: "8px 13px", fontSize: 13 }}>↓ Download CSV</GhostBtn>
             <GhostBtn onClick={() => { setResults([]); setStatus(""); }} style={{ padding: "8px 13px", fontSize: 13 }}>Clear</GhostBtn>
           </div>
         </div>
@@ -800,16 +819,7 @@ Return ONLY JSON: {"pageUrl":"...","coaches":[{"title":"","name":"","email":""}]
 // MY LIST TAB
 // ═══════════════════════════════════════════════════════════════
 function MyListTab({ saved, setSaved, savedKeys, toggleSave, openEmail }) {
-  function exportCSV() {
-    const fields = ["School", "Conference", "Gender", "Title", "Name", "Email"];
-    const lines = [fields.join(",")];
-    saved.forEach(c => lines.push(fields.map(f => `"${String(c[f] || "").replace(/"/g, '""')}"`).join(",")));
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "my_coach_list.csv";
-    a.click();
-  }
+  const exportCSV = () => downloadCoachesCSV(saved, "my_coach_list.csv");
 
   if (saved.length === 0) {
     return (
