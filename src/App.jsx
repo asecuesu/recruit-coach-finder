@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // covers it — no worker change needed.
 // ═══════════════════════════════════════════════════════════════
 
-const BUILD_VERSION = "2026-08-09-v8";
+const BUILD_VERSION = "2026-08-09-v9";
 const PROXY_URL = "https://divine-dust-7329.andrei-secuesu.workers.dev";
 
 // ── Theme ──────────────────────────────────────────────────────
@@ -320,7 +320,11 @@ function CoachCard({ coach, saved, onToggleSave, onEmail }) {
         <div style={{ fontSize: 12, color: T.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>
           {coach.Title}
         </div>
-        <div style={{ fontSize: 17, fontWeight: 700, color: T.ink, margin: "1px 0 2px" }}>{coach.Name}</div>
+        <div style={{ fontSize: 17, fontWeight: 700, color: T.ink, margin: "1px 0 2px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {coach.Name}
+          {coach.Verified === "confirmed" && <span style={{ fontSize: 10, fontWeight: 700, color: "#177245", background: "#e4f3ea", padding: "2px 7px", borderRadius: 20, letterSpacing: 0.3 }}>✓ CONFIRMED</span>}
+          {coach.Verified === "uncertain" && <span style={{ fontSize: 10, fontWeight: 700, color: "#9a7a1e", background: "#fdf6e3", padding: "2px 7px", borderRadius: 20, letterSpacing: 0.3 }}>? UNCERTAIN</span>}
+        </div>
         <div style={{ fontSize: 13, color: T.sub }}>
           {coach.School}{coach.Gender ? ` · ${coach.Gender}` : ""}{coach.Conference ? ` · ${coach.Conference}` : ""}
         </div>
@@ -436,6 +440,7 @@ function FindTab({ profile, setProfile, results, setResults, savedKeys, toggleSa
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [browseOpen, setBrowseOpen] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const cancelRef = useRef(false);
 
   useEffect(() => { setGender(profile.teamGender || "Women's"); }, [profile.teamGender]);
@@ -538,6 +543,45 @@ Return ONLY a valid JSON object, no markdown:
     downloadCoachesCSV(results, `coach_emails_${(profile.sport || "coaches").toLowerCase().replace(/\W+/g, "_")}.csv`);
   }
 
+  // Verify pass (ported from the Python scraper's --verify, lightweight version):
+  // re-check each coach against the live site — confirmed / departed / uncertain —
+  // then drop the ones flagged as departed.
+  async function verifyResults() {
+    const list = [...results];
+    if (!list.length) return;
+    setBusy(true); setVerifying(true); cancelRef.current = false;
+    let confirmed = 0, departed = 0, uncertain = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (cancelRef.current) { setStatus(`Stopped after ${i} of ${list.length}.`); break; }
+      const c = list[i];
+      setStatus(`Verifying… (${i + 1}/${list.length}) ${c.Name} — ${c.School}`);
+      let verdict = "uncertain";
+      try {
+        const g = (c.Gender || gender).toLowerCase(); // e.g. "women's"
+        const prompt = `Search the official ${c.School} athletics website right now.
+Is ${c.Name} currently listed as ${c.Title} for the ${g} ${sportLower} program at ${c.School}?
+Check their current staff directory or ${sportLower} coaches page.
+Answer with ONLY one of these three words:
+- confirmed (they are currently listed in this role)
+- departed (they are no longer listed / have left)
+- uncertain (you cannot find clear current information)
+One word only, no explanation.`;
+        const res = (await geminiSearch(prompt)).toLowerCase();
+        if (res.includes("confirmed")) verdict = "confirmed";
+        else if (res.includes("departed")) verdict = "departed";
+        else verdict = "uncertain";
+      } catch { verdict = "uncertain"; }
+      if (verdict === "confirmed") confirmed++; else if (verdict === "departed") departed++; else uncertain++;
+      const key = coachKey(c);
+      setResults(prev => prev
+        .map(r => (coachKey(r) === key ? { ...r, Verified: verdict } : r))
+        .filter(r => !(coachKey(r) === key && verdict === "departed")));
+      if (!cancelRef.current && i < list.length - 1) await new Promise(r => setTimeout(r, 3000));
+    }
+    if (!cancelRef.current) setStatus(`Verify done — ${confirmed} confirmed, ${uncertain} uncertain, ${departed} departed (removed).`);
+    setVerifying(false); setBusy(false);
+  }
+
   return (
     <div style={{ maxWidth: 720, margin: "0 auto" }}>
       {/* Search hero */}
@@ -599,13 +643,20 @@ Return ONLY a valid JSON object, no markdown:
             {results.length} coach{results.length !== 1 ? "es" : ""} found
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <GhostBtn onClick={verifyResults} disabled={busy} active title="Re-check each coach against the live athletics site and drop any who've left"
+              style={{ padding: "8px 13px", fontSize: 13 }}>
+              {verifying ? "Verifying…" : "✓ Verify still in role"}
+            </GhostBtn>
+            {verifying && (
+              <GhostBtn onClick={() => { cancelRef.current = true; }} style={{ padding: "8px 13px", fontSize: 13, color: T.danger, borderColor: "#f0d5d0" }}>Stop</GhostBtn>
+            )}
             {missingCount > 0 && (
               <GhostBtn onClick={findMissing} disabled={busy} style={{ padding: "8px 13px", fontSize: 13 }}>
                 Find {missingCount} missing email{missingCount !== 1 ? "s" : ""}
               </GhostBtn>
             )}
             <GhostBtn onClick={downloadResults} disabled={busy} style={{ padding: "8px 13px", fontSize: 13 }}>↓ Download CSV</GhostBtn>
-            <GhostBtn onClick={() => { setResults([]); setStatus(""); }} style={{ padding: "8px 13px", fontSize: 13 }}>Clear</GhostBtn>
+            <GhostBtn onClick={() => { setResults([]); setStatus(""); }} disabled={busy} style={{ padding: "8px 13px", fontSize: 13 }}>Clear</GhostBtn>
           </div>
         </div>
       )}
