@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // covers it — no worker change needed.
 // ═══════════════════════════════════════════════════════════════
 
-const BUILD_VERSION = "2026-08-09-v3";
+const BUILD_VERSION = "2026-08-09-v4";
 const PROXY_URL = "https://divine-dust-7329.andrei-secuesu.workers.dev";
 
 // ── Theme ──────────────────────────────────────────────────────
@@ -784,7 +784,7 @@ export default function App() {
             <span style={{ fontSize: 22 }}>🏃</span>
             <div>
               <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: -0.3 }}>Coach Finder</div>
-              <div style={{ fontSize: 12, opacity: 0.85 }}>Reach college {(profile.sport || "Track & Field").toLowerCase()} coaches</div>
+              <div style={{ fontSize: 12, opacity: 0.85 }}>Reach college coaches — any sport</div>
             </div>
           </div>
           <div style={{ fontSize: 10, opacity: 0.5 }} title="build version">v{BUILD_VERSION}</div>
