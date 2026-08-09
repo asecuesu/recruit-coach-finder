@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // covers it — no worker change needed.
 // ═══════════════════════════════════════════════════════════════
 
-const BUILD_VERSION = "2026-08-09-v5";
+const BUILD_VERSION = "2026-08-09-v6";
 const PROXY_URL = "https://divine-dust-7329.andrei-secuesu.workers.dev";
 
 // ── Theme ──────────────────────────────────────────────────────
@@ -608,62 +608,74 @@ Return ONLY a valid JSON object, no markdown:
   );
 }
 
-// ── Browse-by-conference panel (secondary discovery path) ──────
+// ── Browse panel — schools-first discovery (ported from the Python scraper) ──
+// Instead of trusting Gemini's conference list (which drops real conferences for
+// oddly-structured sports like fencing), we enumerate schools directly in
+// alphabetical chunks, then derive the conference filter from what we find.
+const ALPHA_CHUNKS = [["A", "F"], ["G", "M"], ["N", "S"], ["T", "Z"]];
+
 function BrowsePanel({ gender, sport = "", busy, setBusy, setStatus, setResults, cancelRef }) {
   const [division, setDivision] = useState("Division I");
-  const [conferences, setConferences] = useState([]);
-  const [selConf, setSelConf] = useState("");
   const [schools, setSchools] = useState([]);
+  const [confFilter, setConfFilter] = useState(""); // "" = all derived conferences
+  const [discovering, setDiscovering] = useState(false);
   const genderWord = g => (g === "Men's" ? "men" : "women");
   const sportLower = (sport || "").toLowerCase();
   const hasSport = (sport || "").trim().length >= 2;
 
-  // If the athlete flips the team gender after schools are loaded, that list is
-  // now the wrong gender — clear it so they re-load the correct one.
-  const firstGenderRun = useRef(true);
+  const dedupe = list => {
+    const seen = new Set(); const out = [];
+    for (const s of list) { const k = (s.name || "").trim().toLowerCase(); if (k && !seen.has(k)) { seen.add(k); out.push(s); } }
+    return out;
+  };
+
+  // The school list is specific to this gender + division — clear it if either
+  // changes so nobody acts on a stale, wrong-scope list.
+  const firstRun = useRef(true);
   useEffect(() => {
-    if (firstGenderRun.current) { firstGenderRun.current = false; return; }
-    setSchools([]);
-    if (selConf) setStatus(`Switched to ${gender.toLowerCase()} — re-select ${selConf} to load its schools.`);
-  }, [gender]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (firstRun.current) { firstRun.current = false; return; }
+    setSchools([]); setConfFilter("");
+  }, [gender, division]);
 
-  async function loadConferences() {
-    setBusy(true); setStatus(`Loading ${division} conferences…`);
-    try {
-      const text = await geminiSearch(`List all NCAA ${division} athletic conferences that sponsor varsity ${sportLower}. Return ONLY a JSON array of conference name strings.`);
-      setConferences(extractJsonArray(text).filter(c => typeof c === "string" && c.length > 1).sort());
-      setStatus("Pick a conference to see its schools.");
-    } catch (e) { setStatus(e.message); }
-    setBusy(false);
-  }
-
-  async function loadSchools(conf) {
-    setSelConf(conf); setBusy(true); setSchools([]);
+  async function discoverSchools() {
+    if (!hasSport) return;
+    setBusy(true); setDiscovering(true); setSchools([]); setConfFilter("");
+    cancelRef.current = false;
     const gLabel = gender; // "Women's" / "Men's"
-    setStatus(`Loading ${gLabel.toLowerCase()} ${sportLower} schools in ${conf}…`);
-    try {
-      // Gender-accurate discovery (ported from the Python scraper's schools-first
-      // approach): ask specifically for the selected gender's program and guard
-      // against Gemini confusing it with the other gender's program.
-      const text = await geminiSearch(`List every college in the ${conf} conference (NCAA ${division}) that sponsors a varsity ${gLabel} ${sportLower} program.
-Only include schools that actually field a ${gLabel} team — do NOT confuse this with the other gender's program of the same sport, and do not drop real member schools.
-Return ONLY a JSON array, no markdown: [{"name":"School","state":"XX"}]`);
-      setSchools(extractJsonArray(text).filter(s => s && s.name));
-      setStatus(`Tap a school to pull its ${gLabel.toLowerCase()} coaches.`);
-    } catch (e) { setStatus(e.message); }
-    setBusy(false);
+    const found = [];
+    for (const [lo, hi] of ALPHA_CHUNKS) {
+      if (cancelRef.current) { setStatus("Stopped."); break; }
+      setStatus(`Finding ${gLabel.toLowerCase()} ${sportLower} programs in ${division}… (${lo}–${hi})`);
+      try {
+        const text = await geminiSearch(`List EVERY college or university in NCAA ${division} whose name starts with a letter from ${lo} to ${hi} (inclusive) that currently sponsors a varsity ${gLabel} ${sportLower} program.
+Be exhaustive — include every school that sponsors this exact program, even small or lesser-known ones, and include schools that compete in sport-specific or independent conferences. Do NOT confuse this with a different gender's program of the same sport.
+Return ONLY a JSON array, no markdown: [{"name":"School Name","state":"XX","conference":"Conference Name"}]
+If no schools in this letter range sponsor ${gLabel} ${sportLower}, return [].`);
+        const arr = extractJsonArray(text).filter(s => s && s.name)
+          .map(s => ({ ...s, conference: (s.conference || "").trim().replace(/^the\s+/i, "") }));
+        found.push(...arr);
+        setSchools(dedupe(found)); // incremental — schools appear as chunks finish
+      } catch { /* skip this chunk, keep going */ }
+      if (!cancelRef.current) await new Promise(r => setTimeout(r, 3000));
+    }
+    const unique = dedupe(found);
+    setSchools(unique);
+    setStatus(unique.length
+      ? `Found ${unique.length} ${gLabel.toLowerCase()} ${sportLower} program${unique.length !== 1 ? "s" : ""}. Tap a school to get its coaches.`
+      : `No ${gLabel.toLowerCase()} ${sportLower} programs found in ${division}.`);
+    setDiscovering(false); setBusy(false);
   }
 
   async function pullSchool(s) {
-    setBusy(true); setStatus(`Getting ${gender.toLowerCase()} coaches at ${s.name}…`);
+    setBusy(true); setStatus(`Getting ${gender.toLowerCase()} ${sportLower} coaches at ${s.name}…`);
     try {
       const g = genderWord(gender);
-      const text = await geminiSearch(`Go to the official athletics website for ${s.name}${s.state ? ` (${s.state})` : ""}, ${selConf} conference. Navigate to their ${g}'s ${sportLower} COACHES page — make sure it is the ${g}'s program, not the other gender's. Extract every coach — head and all assistants — with exact title, full name, and email.
+      const text = await geminiSearch(`Go to the official athletics website for ${s.name}${s.state ? ` (${s.state})` : ""}${s.conference ? `, ${s.conference}` : ""}. Navigate to their ${g}'s ${sportLower} COACHES page — make sure it is the ${g}'s program, not the other gender's. Extract every coach — head and all assistants — with exact title, full name, and email.
 Return ONLY JSON: {"pageUrl":"...","coaches":[{"title":"","name":"","email":""}]}. Use null for email only if not listed. Never invent data.`);
       const parsed = extractJson(text);
       const obj = parsed && !Array.isArray(parsed) ? parsed : { coaches: Array.isArray(parsed) ? parsed : [] };
       const rows = (obj.coaches || []).filter(c => c && (c.name || "").length > 2).map(c => ({
-        School: s.name, Conference: selConf, Division: division, Gender: gender,
+        School: s.name, Conference: s.conference || "", Division: division, Gender: gender,
         Title: c.title || "Coach", Name: c.name,
         Email: c.email && String(c.email).includes("@") ? c.email : "", _pageUrl: obj.pageUrl || "",
       }));
@@ -671,10 +683,13 @@ Return ONLY JSON: {"pageUrl":"...","coaches":[{"title":"","name":"","email":""}]
         const keys = new Set(prev.map(coachKey));
         return [...rows.filter(r => !keys.has(coachKey(r))), ...prev];
       });
-      setStatus(rows.length ? `Added ${rows.length} coaches from ${s.name}.` : `No coaches found for ${s.name}.`);
+      setStatus(rows.length ? `Added ${rows.length} coach${rows.length !== 1 ? "es" : ""} from ${s.name}.` : `No coaches found for ${s.name}.`);
     } catch (e) { setStatus(e.message); }
     setBusy(false);
   }
+
+  const derivedConfs = [...new Set(schools.map(s => (s.conference || "").trim()).filter(Boolean))].sort();
+  const shownSchools = confFilter ? schools.filter(s => (s.conference || "").trim() === confFilter) : schools;
 
   return (
     <div style={{ marginTop: 12, paddingTop: 14, borderTop: `1px solid ${T.line}` }}>
@@ -685,23 +700,36 @@ Return ONLY JSON: {"pageUrl":"...","coaches":[{"title":"","name":"","email":""}]
       )}
       <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
         {["Division I", "Division II", "Division III"].map(d => (
-          <GhostBtn key={d} active={division === d} onClick={() => setDivision(d)} style={{ flex: 1, padding: "8px 0", textAlign: "center" }}>{d.replace("Division ", "D")}</GhostBtn>
+          <GhostBtn key={d} active={division === d} onClick={() => !busy && setDivision(d)} style={{ flex: 1, padding: "8px 0", textAlign: "center" }}>{d.replace("Division ", "D")}</GhostBtn>
         ))}
       </div>
-      <GhostBtn onClick={loadConferences} disabled={busy || !hasSport} style={{ width: "100%", textAlign: "center", padding: "10px", marginBottom: 10, opacity: hasSport ? 1 : 0.5 }}>
-        Load {division} conferences
+
+      <GhostBtn onClick={discoverSchools} disabled={busy || !hasSport} style={{ width: "100%", textAlign: "center", padding: "10px", marginBottom: 8, opacity: hasSport ? 1 : 0.5 }}>
+        {discovering ? "Finding all programs…" : `Find all ${gender.toLowerCase()} ${sportLower || "—"} programs in ${division.replace("Division ", "D")}`}
       </GhostBtn>
-      {conferences.length > 0 && (
-        <select value={selConf} onChange={e => loadSchools(e.target.value)} disabled={busy}
-          style={{ width: "100%", padding: "11px 12px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 14, marginBottom: 10, background: "#fbfdfc", color: T.ink }}>
-          <option value="">Select a conference…</option>
-          {conferences.map(c => <option key={c} value={c}>{c}</option>)}
+      {discovering && (
+        <GhostBtn onClick={() => { cancelRef.current = true; }} style={{ width: "100%", textAlign: "center", padding: "8px", marginBottom: 8, color: T.danger, borderColor: "#f0d5d0" }}>
+          Stop
+        </GhostBtn>
+      )}
+      {hasSport && !discovering && schools.length === 0 && (
+        <div style={{ fontSize: 11, color: T.faint, marginBottom: 8, lineHeight: 1.5 }}>
+          This scans the whole division so it catches every program (even independents) — it runs a few searches and takes a minute or two.
+        </div>
+      )}
+
+      {derivedConfs.length > 0 && (
+        <select value={confFilter} onChange={e => setConfFilter(e.target.value)} disabled={busy}
+          style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 13, marginBottom: 10, background: "#fbfdfc", color: T.ink }}>
+          <option value="">All conferences ({schools.length} schools)</option>
+          {derivedConfs.map(c => <option key={c} value={c}>{c} ({schools.filter(s => (s.conference || "").trim() === c).length})</option>)}
         </select>
       )}
-      {schools.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 180, overflowY: "auto" }}>
-          {schools.map(s => (
-            <GhostBtn key={s.name} onClick={() => pullSchool(s)} disabled={busy} style={{ fontSize: 13, padding: "7px 11px" }}>
+
+      {shownSchools.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto" }}>
+          {shownSchools.map(s => (
+            <GhostBtn key={s.name} onClick={() => pullSchool(s)} disabled={busy} style={{ fontSize: 13, padding: "7px 11px" }} title={s.conference || ""}>
               {s.name}
             </GhostBtn>
           ))}
