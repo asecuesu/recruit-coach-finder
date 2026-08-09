@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // covers it — no worker change needed.
 // ═══════════════════════════════════════════════════════════════
 
-const BUILD_VERSION = "2026-08-09-v10";
+const BUILD_VERSION = "2026-08-09-v11";
 const PROXY_URL = "https://divine-dust-7329.andrei-secuesu.workers.dev";
 
 // ── Theme ──────────────────────────────────────────────────────
@@ -301,6 +301,14 @@ function ProfileTab({ profile, setProfile }) {
 
       <div style={{ marginTop: 8, fontSize: 13, color: complete ? T.accent : T.gold, fontWeight: 600 }}>
         {complete ? "✓ Profile ready — your emails will fill in automatically." : "Add at least your name, grad year, and email for the best emails."}
+      </div>
+
+      <div style={{ marginTop: 22, paddingTop: 16, borderTop: `1px solid ${T.line}`, display: "flex", justifyContent: "flex-end" }}>
+        <button
+          onClick={() => { if (confirm("Reset your profile? This clears every field on this device. Your saved coach list is not affected.")) setProfile(EMPTY_PROFILE); }}
+          style={{ padding: "9px 15px", borderRadius: 10, border: `1px solid #f0d5d0`, background: "#fff", color: T.danger, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          Reset profile
+        </button>
       </div>
     </div>
   );
